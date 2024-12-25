@@ -9,8 +9,11 @@ import { useRouter } from 'expo-router';
 import NetInfo from '@react-native-community/netinfo';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
+import * as Notifications from 'expo-notifications';
+import Linking from 'expo-linking';
 
 const LOCATION_TASK_NAME = 'background-location-task';
+const BACKGROUND_FETCH_TASK = 'background-fetch';
 
 TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
   try {
@@ -24,6 +27,20 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
     console.error('Error in background task:', error);
     return BackgroundFetch.Result.Failed;
   }
+});
+
+TaskManager.defineTask(BACKGROUND_FETCH_TASK, async () => {
+  const now = Date.now();
+  console.log(`Got background fetch call at date: ${new Date(now).toISOString()}`);
+  
+  // Check if the user is checked in
+  const isCheckedIn = await AsyncStorage.getItem('isCheckedIn');
+  if (isCheckedIn === 'true') {
+    const location = await Location.getCurrentPositionAsync({});
+    await sendLocationToAPI(location.coords);
+  }
+
+  return BackgroundFetch.Result.NewData;
 });
 
 async function sendLocationToAPI(coords) {
@@ -123,6 +140,7 @@ export default function Home() {
     getSavedData();
     setupLocationTracking();
     registerBackgroundFetch();
+    restoreCheckInState();
   }, []);
 
   useEffect(() => {
@@ -134,19 +152,24 @@ export default function Home() {
       }
     });
 
-    return () => unsubscribe();
+    const locationCheckInterval = setInterval(checkLocationServices, 60000); // Check every minute
+
+    return () => {
+      unsubscribe();
+      clearInterval(locationCheckInterval);
+    };
   }, []);
 
   const registerBackgroundFetch = async () => {
     try {
-      await BackgroundFetch.registerTaskAsync(LOCATION_TASK_NAME, {
-        minimumInterval: 3600, // 1 hour in seconds
+      await BackgroundFetch.registerTaskAsync(BACKGROUND_FETCH_TASK, {
+        minimumInterval: 60 * 60, // 1 hour
         stopOnTerminate: false,
         startOnBoot: true,
       });
-      console.log('Background fetch task registered');
+      console.log("Background fetch registered");
     } catch (err) {
-      console.error('Background fetch failed to register:', err);
+      console.log("Background fetch failed to register");
     }
   };
 
@@ -154,6 +177,12 @@ export default function Home() {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permiso denegado', 'Se necesita acceso a la ubicación para usar esta aplicación.');
+      return;
+    }
+
+    let backgroundStatus = await Location.requestBackgroundPermissionsAsync();
+    if (backgroundStatus.status !== 'granted') {
+      Alert.alert('Permiso denegado', 'Se necesita acceso a la ubicación en segundo plano para usar esta aplicación.');
       return;
     }
 
@@ -175,6 +204,19 @@ export default function Home() {
         }
       }
     );
+  };
+
+  const checkLocationServices = async () => {
+    const enabled = await Location.hasServicesEnabledAsync();
+    if (!enabled) {
+      Alert.alert(
+        'Ubicación desactivada',
+        'Por favor, active los servicios de ubicación para continuar usando la aplicación.',
+        [
+          { text: 'OK', onPress: () => Linking.openSettings() }
+        ]
+      );
+    }
   };
 
   const handleSelectChange = (itemValue) => {
@@ -259,6 +301,7 @@ export default function Home() {
                 await handleApiCall('entrada');
                 setIsCheckedIn(true);
                 await AsyncStorage.setItem('isCheckedIn', 'true');
+                await AsyncStorage.setItem('checkedInNodoId', selectedNodo.id.toString());
                 Alert.alert('Check-in exitoso', `Has ingresado al cliente ${selectedNodo.nombre}`);
               }
             }
@@ -280,6 +323,7 @@ export default function Home() {
                 await handleApiCall('salida');
                 setIsCheckedIn(false);
                 await AsyncStorage.setItem('isCheckedIn', 'false');
+                await AsyncStorage.removeItem('checkedInNodoId');
                 setTicket('');
                 Alert.alert('Check-out exitoso', `Has salido del cliente ${selectedNodo.nombre}`);
               }
@@ -453,6 +497,19 @@ export default function Home() {
     );
   };
 
+  const restoreCheckInState = async () => {
+    const storedIsCheckedIn = await AsyncStorage.getItem('isCheckedIn');
+    const storedNodoId = await AsyncStorage.getItem('checkedInNodoId');
+    
+    if (storedIsCheckedIn === 'true' && storedNodoId) {
+      setIsCheckedIn(true);
+      const nodo = nodos.find(n => n.id.toString() === storedNodoId);
+      if (nodo) {
+        setSelectedNodo(nodo);
+      }
+    }
+  };
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -517,8 +574,8 @@ export default function Home() {
             ref={mapRef}
             style={styles.map}
             initialRegion={{
-              latitude: userLocation ? userLocation.latitude : 0,
-              longitude: userLocation ? userLocation.longitude : 0,
+              latitude: 7.1191,  // Latitude of Bucaramanga
+              longitude: -73.1227,  // Longitude of Bucaramanga
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
