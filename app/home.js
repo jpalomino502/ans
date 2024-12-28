@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Modal, FlatList, Alert } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, Modal, FlatList, Alert, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Constants from 'expo-constants';
@@ -9,11 +9,10 @@ import { useRouter } from 'expo-router';
 import NetInfo from '@react-native-community/netinfo';
 import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
-import * as Notifications from 'expo-notifications';
-import Linking from 'expo-linking';
+import LocationSelector from './components/LocationSelector';
+import TicketSelector from './components/TicketSelector';
 
 const LOCATION_TASK_NAME = 'background-location-task';
-const BACKGROUND_FETCH_TASK = 'background-fetch';
 
 TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
   try {
@@ -29,37 +28,27 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
   }
 });
 
-TaskManager.defineTask(BACKGROUND_FETCH_TASK, async () => {
-  const now = Date.now();
-  console.log(`Got background fetch call at date: ${new Date(now).toISOString()}`);
-  
-  // Check if the user is checked in
-  const isCheckedIn = await AsyncStorage.getItem('isCheckedIn');
-  if (isCheckedIn === 'true') {
-    const location = await Location.getCurrentPositionAsync({});
-    await sendLocationToAPI(location.coords);
-  }
-
-  return BackgroundFetch.Result.NewData;
-});
-
 async function sendLocationToAPI(coords) {
   const userId = await AsyncStorage.getItem('userId');
-  if (!userId) {
-    console.log('sendLocationToAPI: No userId found');
+  const clientId = await AsyncStorage.getItem('clientId'); // Asumimos que guardamos el id_clientes en AsyncStorage
+  if (!userId || !clientId) {
+    console.log('sendLocationToAPI: No userId or clientId found');
     return;
   }
 
+  const currentDate = new Date().toISOString();
   const locationData = {
     id_usuario: userId,
+    id_clientes: clientId,
     lat: coords.latitude.toString(),
     log: coords.longitude.toString(),
+    fecha_registro: currentDate
   };
 
   console.log('Sending location to API:', JSON.stringify(locationData, null, 2));
 
   try {
-    const response = await fetch('https://api.grupoans.com.co/api/ubicacion-usuario', {
+    const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ubicacion-usuario', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -67,12 +56,12 @@ async function sendLocationToAPI(coords) {
       body: JSON.stringify(locationData),
     });
 
-    const responseText = await response.text();
-    console.log('Location API Response (raw):', responseText);
-
     if (!response.ok) {
       throw new Error('Network response was not ok');
     }
+
+    const responseText = await response.text();
+    console.log('Location API Response (raw):', responseText);
 
     console.log('Location sent successfully');
     
@@ -103,9 +92,6 @@ export default function Home() {
   const router = useRouter();
   const [nodos, setNodos] = useState([]);
   const [selectedNodo, setSelectedNodo] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [modalVisible, setModalVisible] = useState(false);
-  const [ticket, setTicket] = useState('');
   const [userLocation, setUserLocation] = useState(null);
   const [isCheckedIn, setIsCheckedIn] = useState(false);
   const [distance, setDistance] = useState(null);
@@ -114,6 +100,33 @@ export default function Home() {
   const [entryId, setEntryId] = useState('');
   const mapRef = useRef(null);
   const [connectionStatus, setConnectionStatus] = useState('Checking...');
+
+  const [tickets, setTickets] = useState([]);
+  const [selectedTicket, setSelectedTicket] = useState(null);
+  const [comments, setComments] = useState('');
+
+  const locationSelectorRef = useRef(null);
+  const ticketSelectorRef = useRef(null);
+
+  const saveCheckInData = async () => {
+    try {
+      await AsyncStorage.setItem('checkedInNodo', JSON.stringify(selectedNodo));
+      await AsyncStorage.setItem('checkedInTicket', JSON.stringify(selectedTicket));
+    } catch (error) {
+      console.error('Error saving check-in data:', error);
+    }
+  };
+
+  const loadCheckInData = async () => {
+    try {
+      const savedNodo = await AsyncStorage.getItem('checkedInNodo');
+      const savedTicket = await AsyncStorage.getItem('checkedInTicket');
+      if (savedNodo) setSelectedNodo(JSON.parse(savedNodo));
+      if (savedTicket) setSelectedTicket(JSON.parse(savedTicket));
+    } catch (error) {
+      console.error('Error loading check-in data:', error);
+    }
+  };
 
   useEffect(() => {
     const getSavedData = async () => {
@@ -129,9 +142,20 @@ export default function Home() {
         const storedIsCheckedIn = await AsyncStorage.getItem('isCheckedIn');
         if (storedIsCheckedIn) {
           setIsCheckedIn(storedIsCheckedIn === 'true');
+          if (storedIsCheckedIn === 'true') {
+            await loadCheckInData();
+          }
         }
         const userId = await AsyncStorage.getItem('userId');
+        const clientId = await AsyncStorage.getItem('clientId');
         console.log('User ID recuperado:', userId);
+        console.log('Client ID recuperado:', clientId);
+
+        // Load ticket data
+        const storedTicketData = await AsyncStorage.getItem('apiData2');
+        if (storedTicketData) {
+          setTickets(JSON.parse(storedTicketData));
+        }
       } catch (error) {
         console.error('Error al recuperar los datos de AsyncStorage:', error);
       }
@@ -140,7 +164,6 @@ export default function Home() {
     getSavedData();
     setupLocationTracking();
     registerBackgroundFetch();
-    restoreCheckInState();
   }, []);
 
   useEffect(() => {
@@ -152,24 +175,19 @@ export default function Home() {
       }
     });
 
-    const locationCheckInterval = setInterval(checkLocationServices, 60000); // Check every minute
-
-    return () => {
-      unsubscribe();
-      clearInterval(locationCheckInterval);
-    };
+    return () => unsubscribe();
   }, []);
 
   const registerBackgroundFetch = async () => {
     try {
-      await BackgroundFetch.registerTaskAsync(BACKGROUND_FETCH_TASK, {
-        minimumInterval: 60 * 60, // 1 hour
+      await BackgroundFetch.registerTaskAsync(LOCATION_TASK_NAME, {
+        minimumInterval: 3600, // 1 hour in seconds
         stopOnTerminate: false,
         startOnBoot: true,
       });
-      console.log("Background fetch registered");
+      console.log('Background fetch task registered');
     } catch (err) {
-      console.log("Background fetch failed to register");
+      console.error('Background fetch failed to register:', err);
     }
   };
 
@@ -177,12 +195,6 @@ export default function Home() {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert('Permiso denegado', 'Se necesita acceso a la ubicación para usar esta aplicación.');
-      return;
-    }
-
-    let backgroundStatus = await Location.requestBackgroundPermissionsAsync();
-    if (backgroundStatus.status !== 'granted') {
-      Alert.alert('Permiso denegado', 'Se necesita acceso a la ubicación en segundo plano para usar esta aplicación.');
       return;
     }
 
@@ -206,52 +218,6 @@ export default function Home() {
     );
   };
 
-  const checkLocationServices = async () => {
-    const enabled = await Location.hasServicesEnabledAsync();
-    if (!enabled) {
-      Alert.alert(
-        'Ubicación desactivada',
-        'Por favor, active los servicios de ubicación para continuar usando la aplicación.',
-        [
-          { text: 'OK', onPress: () => Linking.openSettings() }
-        ]
-      );
-    }
-  };
-
-  const handleSelectChange = (itemValue) => {
-    if (!isCheckedIn) {
-      const nodo = nodos.find((n) => n.id === parseInt(itemValue));
-      setSelectedNodo(nodo);
-      setModalVisible(false);
-      setTicket('');
-      if (mapRef.current && nodo) {
-        mapRef.current.animateToRegion({
-          latitude: parseFloat(nodo.latitud),
-          longitude: parseFloat(nodo.longitud),
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        });
-      }
-    } else {
-      Alert.alert('No se puede cambiar', 'Debes salir del cliente actual antes de seleccionar otro.');
-    }
-  };
-
-  const filteredNodos = nodos.filter((nodo) =>
-    nodo.nombre.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const clearSelection = () => {
-    if (!isCheckedIn) {
-      setSelectedNodo(null);
-      setSearchQuery('');
-      setModalVisible(false);
-    } else {
-      Alert.alert('No se puede cambiar', 'Debes salir del cliente actual antes de limpiar la selección.');
-    }
-  };
-
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371e3;
     const φ1 = lat1 * Math.PI/180;
@@ -268,7 +234,7 @@ export default function Home() {
   };
 
   const handleCheckInOut = async () => {
-    if (!selectedNodo || !userLocation) return;
+    if (!userLocation) return;
 
     const distance = calculateDistance(
       userLocation.latitude,
@@ -280,15 +246,15 @@ export default function Home() {
     const maxDistance = 20000;
 
     if (distance <= maxDistance) {
-      if (ticket.trim() === '') {
-        Alert.alert('Error', 'Debes ingresar un ticket para realizar la acción.');
-        return;
-      }
-
       if (!isCheckedIn) {
+        if (!comments.trim()) {
+          Alert.alert('Error', 'Debes ingresar un comentario para el ingreso.');
+          return;
+        }
+
         Alert.alert(
           'Confirmar ingreso',
-          `¿Estás seguro de que quieres ingresar al cliente ${selectedNodo.nombre}?`,
+          `¿Estás seguro de que quieres ingresar a la ubicacion ${selectedNodo.nombre}?`,
           [
             {
               text: 'Cancelar',
@@ -298,16 +264,26 @@ export default function Home() {
               text: 'Sí, ingresar',
               onPress: async () => {
                 console.log('Initiating check-in');
-                await handleApiCall('entrada');
-                setIsCheckedIn(true);
-                await AsyncStorage.setItem('isCheckedIn', 'true');
-                await AsyncStorage.setItem('checkedInNodoId', selectedNodo.id.toString());
-                Alert.alert('Check-in exitoso', `Has ingresado al cliente ${selectedNodo.nombre}`);
+                const success = await handleApiCall('entrada');
+                if (success) {
+                  setIsCheckedIn(true);
+                  await AsyncStorage.setItem('isCheckedIn', 'true');
+                  await saveCheckInData();
+                  setComments('');
+                  Alert.alert('Check-in exitoso', `Has ingresado a la ubicacion ${selectedNodo.nombre}`);
+                } else {
+                  Alert.alert('Error', 'No se pudo realizar el check-in. Por favor, intenta de nuevo.');
+                }
               }
             }
           ]
         );
       } else {
+        if (!comments.trim()) {
+          Alert.alert('Error', 'Debes ingresar un comentario para la salida.');
+          return;
+        }
+
         Alert.alert(
           'Confirmar salida',
           '¿Estás seguro de que quieres salir?',
@@ -320,38 +296,57 @@ export default function Home() {
               text: 'Sí, salir',
               onPress: async () => {
                 console.log('Initiating check-out');
-                await handleApiCall('salida');
-                setIsCheckedIn(false);
-                await AsyncStorage.setItem('isCheckedIn', 'false');
-                await AsyncStorage.removeItem('checkedInNodoId');
-                setTicket('');
-                Alert.alert('Check-out exitoso', `Has salido del cliente ${selectedNodo.nombre}`);
+                const success = await handleApiCall('salida');
+                if (success) {
+                  setIsCheckedIn(false);
+                  await AsyncStorage.setItem('isCheckedIn', 'false');
+                  setSelectedNodo(null);
+                  setSelectedTicket(null);
+                  setComments('');
+                  await AsyncStorage.removeItem('checkedInNodo');
+                  await AsyncStorage.removeItem('checkedInTicket');
+                  Alert.alert('Check-out exitoso', `Has salido de la ubicacion ${selectedNodo.nombre}`);
+                  
+                  // Reset LocationSelector and TicketSelector
+                  if (locationSelectorRef.current) {
+                    locationSelectorRef.current.resetSelection();
+                  }
+                  if (ticketSelectorRef.current) {
+                    ticketSelectorRef.current.resetSelection();
+                  }
+                } else {
+                  Alert.alert('Error', 'No se pudo realizar el check-out. Por favor, intenta de nuevo.');
+                }
               }
             }
           ]
         );
       }
     } else {
-      Alert.alert('Fuera de rango', `Debes estar a menos de ${maxDistance}m del cliente para ${isCheckedIn ? 'salir' : 'ingresar'}.`);
+      Alert.alert('Fuera de rango', `Debes estar a menos de ${maxDistance}m de la ubicacion para ${isCheckedIn ? 'salir' : 'ingresar'}.`);
     }
   };
 
   const handleApiCall = async (tipo) => {
+    const userId = await AsyncStorage.getItem('userId');
+    const clientId = await AsyncStorage.getItem('clientId');
     const data = {
       tipo,
       nombre: selectedNodo.nombre,
-      ticket: ticket,
+      ticket: selectedTicket ? selectedTicket.ticket : '',
+      comentarios: comments,
       lat: userLocation.latitude.toString(),
       log: userLocation.longitude.toString(),
       fecha_registro: new Date().toISOString(),
-      id_clientes: selectedNodo.id.toString()
+      id_clientes: clientId,
+      id_usuario: userId
     };
 
     console.log('Sending data to API:', JSON.stringify(data, null, 2));
 
     if (isOnline) {
       try {
-        const response = await fetch('https://api.grupoans.com.co/api/ingreso-salidas', {
+        const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ingreso-salidas', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -368,25 +363,27 @@ export default function Home() {
           console.log('API Response (parsed):', JSON.stringify(responseData, null, 2));
         } catch (parseError) {
           console.error('Error parsing JSON:', parseError);
-          throw new Error('Invalid JSON response from server');
+          return false;
         }
 
         if (!response.ok) {
           throw new Error('Network response was not ok');
         }
 
-        // Enviar ubicación después de un ingreso o salida exitoso
         console.log('Calling sendLocationToAPI after successful check-in/out');
         await sendLocationToAPI(userLocation);
 
+        return true;
       } catch (error) {
         console.error('Error:', error);
         console.log('Storing data offline due to error');
-        storeOfflineData(data);
+        await storeOfflineData(data);
+        return false;
       }
     } else {
       console.log('Offline: Storing data locally');
-      storeOfflineData(data);
+      await storeOfflineData(data);
+      return true;
     }
   };
 
@@ -408,7 +405,7 @@ export default function Home() {
     for (let i = 0; i < updatedOfflineData.length; i++) {
       try {
         console.log('Syncing item:', JSON.stringify(updatedOfflineData[i], null, 2));
-        const response = await fetch('https://api.grupoans.com.co/api/ingreso-salidas', {
+        const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ingreso-salidas', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -425,14 +422,13 @@ export default function Home() {
           console.log('API Response for sync (parsed):', JSON.stringify(responseData, null, 2));
         } catch (parseError) {
           console.error('Error parsing JSON during sync:', parseError);
-          continue; // Skip this item and move to the next
+          continue;
         }
 
         if (response.ok) {
           console.log('Successfully synced item');
-          // Remove synced item
           updatedOfflineData.splice(i, 1);
-          i--; // Adjust index after removal
+          i--;
         } else {
           console.error('Failed to sync item:', updatedOfflineData[i]);
         }
@@ -442,11 +438,9 @@ export default function Home() {
     }
 
     console.log('Offline sync complete. Remaining items:', updatedOfflineData.length);
-    // Update offline data state and storage
     setOfflineData(updatedOfflineData);
     await AsyncStorage.setItem('offlineData', JSON.stringify(updatedOfflineData));
 
-    // Sync pending locations
     const pendingLocations = await AsyncStorage.getItem('pendingLocations');
     if (pendingLocations) {
       const locations = JSON.parse(pendingLocations);
@@ -469,7 +463,24 @@ export default function Home() {
     }
   }, [selectedNodo, userLocation]);
 
+  useEffect(() => {
+    console.log('User location updated:', userLocation);
+  }, [userLocation]);
+
+  useEffect(() => {
+    console.log('Selected nodo updated:', selectedNodo);
+  }, [selectedNodo]);
+
   const handleLogout = async () => {
+    if (isCheckedIn) {
+      Alert.alert(
+        "No se puede cerrar sesión",
+        "Debes salir de la ubicación actual antes de cerrar sesión.",
+        [{ text: "Entendido" }]
+      );
+      return;
+    }
+
     Alert.alert(
       "Cerrar Sesión",
       "¿Estás seguro que quieres cerrar sesión?",
@@ -484,8 +495,10 @@ export default function Home() {
             try {
               await AsyncStorage.removeItem('authToken');
               await AsyncStorage.removeItem('userId');
+              await AsyncStorage.removeItem('isCheckedIn');
+              await AsyncStorage.removeItem('checkedInNodo');
+              await AsyncStorage.removeItem('checkedInTicket');
               await AsyncStorage.setItem('wasLoggedOut', 'true');
-              await AsyncStorage.setItem('isCheckedIn', 'false');
               router.replace('/');
             } catch (error) {
               console.error('Error during logout:', error);
@@ -497,19 +510,6 @@ export default function Home() {
     );
   };
 
-  const restoreCheckInState = async () => {
-    const storedIsCheckedIn = await AsyncStorage.getItem('isCheckedIn');
-    const storedNodoId = await AsyncStorage.getItem('checkedInNodoId');
-    
-    if (storedIsCheckedIn === 'true' && storedNodoId) {
-      setIsCheckedIn(true);
-      const nodo = nodos.find(n => n.id.toString() === storedNodoId);
-      if (nodo) {
-        setSelectedNodo(nodo);
-      }
-    }
-  };
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -518,33 +518,41 @@ export default function Home() {
           <Text style={styles.statusText}>{connectionStatus}</Text>
           <View style={[styles.statusIndicator, { backgroundColor: isOnline ? '#4CAF50' : '#F44336' }]} />
         </View>
-        <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
-          <Ionicons name="log-out-outline" size={24} color="black" />
+        <TouchableOpacity 
+          onPress={handleLogout} 
+          style={[styles.logoutButton, isCheckedIn && styles.disabledLogoutButton]}
+          disabled={isCheckedIn}
+        >
+          <Ionicons name="log-out-outline" size={24} color={isCheckedIn ? "gray" : "black"} />
         </TouchableOpacity>
       </View>
 
-      <View style={styles.contentContainer}>
-        <TouchableOpacity 
-          onPress={() => !isCheckedIn && setModalVisible(true)} 
-          style={[styles.pickerButton, isCheckedIn && styles.disabledButton]}
-          disabled={isCheckedIn}
-        >
-          <Text style={styles.pickerText}>
-            {selectedNodo ? selectedNodo.nombre : 'Seleccione un cliente'}
-          </Text>
-        </TouchableOpacity>
+      <ScrollView style={styles.contentContainer} contentContainerStyle={styles.scrollViewContent}>
+        <LocationSelector 
+          ref={locationSelectorRef}
+          onSelectLocation={setSelectedNodo} 
+          isCheckedIn={isCheckedIn} 
+          initialLocation={selectedNodo} 
+        />
+        <TicketSelector 
+          ref={ticketSelectorRef}
+          onSelectTicket={setSelectedTicket} 
+          isCheckedIn={isCheckedIn}
+          initialTicket={selectedTicket} 
+        />
 
         <View style={styles.inputContainer}>
           <TextInput
-            style={[styles.input, isCheckedIn && styles.disabledInput]}
-            placeholder="Ingrese el ticket"
-            value={ticket}
-            onChangeText={setTicket}
-            editable={!isCheckedIn}
+            style={[styles.input, isCheckedIn ? styles.activeInput : styles.inactiveInput]}
+            placeholder={isCheckedIn ? "Comentarios para salida" : "Comentarios para ingreso"}
+            value={comments}
+            onChangeText={setComments}
+            editable={true}
+            multiline
           />
         </View>
 
-        {selectedNodo && (
+        {selectedNodo && selectedTicket && (
           <TouchableOpacity
             style={[
               styles.button,
@@ -561,7 +569,7 @@ export default function Home() {
         {selectedNodo && distance !== null && (
           <View style={styles.distanceContainer}>
             <Text style={styles.distanceText}>
-              Distancia al cliente: {(distance / 1000).toFixed(2)} km
+              Distancia de la ubicacion: {(distance / 1000).toFixed(2)} km
             </Text>
             <Text style={styles.distanceStatus}>
               {distance <= 20000 ? 'Dentro del rango' : 'Fuera del rango'}
@@ -574,8 +582,8 @@ export default function Home() {
             ref={mapRef}
             style={styles.map}
             initialRegion={{
-              latitude: 7.1191,  // Latitude of Bucaramanga
-              longitude: -73.1227,  // Longitude of Bucaramanga
+              latitude: userLocation ? userLocation.latitude : 0,
+              longitude: userLocation ? userLocation.longitude : 0,
               latitudeDelta: 0.05,
               longitudeDelta: 0.05,
             }}
@@ -609,44 +617,7 @@ export default function Home() {
             )}
           </MapView>
         </View>
-      </View>
-
-      <Modal
-        visible={modalVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <View style={styles.searchContainer}>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Buscar cliente..."
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-              />
-            </View>
-
-            <FlatList
-              data={filteredNodos}
-              keyExtractor={(item) => item.id.toString()}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.pickerItem}
-                  onPress={() => handleSelectChange(item.id.toString())}
-                >
-                  <Text style={styles.pickerItemText}>{item.nombre}</Text>
-                </TouchableOpacity>
-              )}
-            />
-
-            <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.closeButton}>
-              <Text style={styles.closeButtonText}>Cerrar</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      </ScrollView>
     </View>
   );
 }
@@ -678,6 +649,10 @@ const styles = StyleSheet.create({
   contentContainer: {
     flex: 1,
     padding: 15,
+  },
+  scrollViewContent: {
+    flexGrow: 1,
+    paddingBottom: 20,
   },
   pickerButton: {
     width: '100%',
@@ -754,9 +729,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#000000',
   },
+  activeInput: {
+    backgroundColor: '#ffffff',
+    borderColor: '#000000',
+  },
+  inactiveInput: {
+    backgroundColor: '#ffffff',
+    borderColor: '#000000',
+  },
   disabledInput: {
-    backgroundColor: '#f0f0f0',
-    color: '#888',
+    backgroundColor: '#ffffff',
+    color: '#000000',
   },
   button: {
     width: '100%',
@@ -787,6 +770,7 @@ const styles = StyleSheet.create({
     width: '100%',
     height: 300,
     marginTop: 20,
+    marginBottom: 20,
   },
   map: {
     width: '100%',
@@ -823,4 +807,8 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#4CAF50',
   },
+  disabledLogoutButton: {
+    opacity: 0.5,
+  },
 });
+

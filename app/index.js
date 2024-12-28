@@ -38,7 +38,7 @@ export default function Login() {
       setLoading(true);
 
       try {
-        const response = await fetch("https://api.grupoans.com.co/api/auth/login", {
+        const response = await fetch("https://asistenciaoperacional.grupoans.com.co/api/auth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ email, password }),
