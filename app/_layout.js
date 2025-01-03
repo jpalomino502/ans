@@ -10,7 +10,6 @@ export default function Layout() {
       try {
         const authToken = await AsyncStorage.getItem("authToken");
         if (authToken) {
-          // Si hay un token de autenticación, redirigir a la pantalla de carga
           router.replace("/loading");
         }
         // Si no hay token, se queda en la pantalla de login (index.js)
