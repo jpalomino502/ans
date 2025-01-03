@@ -262,7 +262,6 @@ export default function Home() {
                   setComments('');
                   Alert.alert('Check-in exitoso', `Has ingresado a la ubicacion ${selectedNodo.nombre}`);
                   
-                  // Send location immediately after check-in
                   await sendLocationToAPI(userLocation);
                   
                   // Start sending location every hour
