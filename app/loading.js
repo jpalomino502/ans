@@ -27,7 +27,6 @@ export default function Loading() {
             throw new Error("No se encontró el ID de usuario");
           }
 
-          // Fetch and save data from the first API
           const response1 = await fetch("https://asistenciaoperacional.grupoans.com.co/api/clientesnodosoficinas_asistenciaoperacional", {
             headers: {
               'Authorization': `Bearer ${authToken}`
