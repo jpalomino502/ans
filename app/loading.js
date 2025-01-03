@@ -42,7 +42,6 @@ export default function Loading() {
             throw new Error("La respuesta de la primera API no es un array");
           }
 
-          // Fetch and save data from the second API
           const response2 = await fetch("https://asistenciaoperacional.grupoans.com.co/api/consultaticketsmasiopticks", {
             headers: {
               'Authorization': `Bearer ${authToken}`
