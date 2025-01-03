@@ -50,7 +50,6 @@ export default function Login() {
         if (response.ok) {
           await AsyncStorage.setItem("authToken", data.token);
           
-          // Store the user ID
           if (data.user && data.user.id) {
             await AsyncStorage.setItem("userId", data.user.id.toString());
             console.log("ID de usuario almacenado:", data.user.id);
