@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Modal, FlatList, Alert, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Constants from 'expo-constants';
@@ -13,6 +13,7 @@ import LocationSelector from './components/LocationSelector';
 import TicketSelector from './components/TicketSelector';
 
 const LOCATION_TASK_NAME = 'background-location-task';
+const LOCATION_INTERVAL = 3600000;
 
 TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
   try {
@@ -30,19 +31,17 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
 
 async function sendLocationToAPI(coords) {
   const userId = await AsyncStorage.getItem('userId');
-  const clientId = await AsyncStorage.getItem('clientId'); // Asumimos que guardamos el id_clientes en AsyncStorage
+  const clientId = coords.clientId;
   if (!userId || !clientId) {
     console.log('sendLocationToAPI: No userId or clientId found');
     return;
   }
 
-  const currentDate = new Date().toISOString();
   const locationData = {
     id_usuario: userId,
-    id_clientes: clientId,
+    id_clientes: clientId.toString(),
     lat: coords.latitude.toString(),
     log: coords.longitude.toString(),
-    fecha_registro: currentDate
   };
 
   console.log('Sending location to API:', JSON.stringify(locationData, null, 2));
@@ -61,17 +60,9 @@ async function sendLocationToAPI(coords) {
     }
 
     const responseText = await response.text();
-    console.log('Location API Response (raw):', responseText);
+    console.log('Location API Response:', responseText);
 
     console.log('Location sent successfully');
-    
-    let responseData;
-    try {
-      responseData = JSON.parse(responseText);
-      console.log('Location API Response (parsed):', JSON.stringify(responseData, null, 2));
-    } catch (parseError) {
-      console.error('Error parsing JSON from location API:', parseError);
-    }
   } catch (error) {
     console.error('Error sending location:', error);
     await storePendingLocation(locationData);
@@ -100,13 +91,12 @@ export default function Home() {
   const [entryId, setEntryId] = useState('');
   const mapRef = useRef(null);
   const [connectionStatus, setConnectionStatus] = useState('Checking...');
-
   const [tickets, setTickets] = useState([]);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [comments, setComments] = useState('');
-
   const locationSelectorRef = useRef(null);
   const ticketSelectorRef = useRef(null);
+  const locationIntervalRef = useRef(null);
 
   const saveCheckInData = async () => {
     try {
@@ -131,7 +121,7 @@ export default function Home() {
   useEffect(() => {
     const getSavedData = async () => {
       try {
-        const storedData = await AsyncStorage.getItem('apiData');
+        const storedData = await AsyncStorage.getItem('apiData1');
         if (storedData) {
           setNodos(JSON.parse(storedData));
         }
@@ -147,11 +137,8 @@ export default function Home() {
           }
         }
         const userId = await AsyncStorage.getItem('userId');
-        const clientId = await AsyncStorage.getItem('clientId');
         console.log('User ID recuperado:', userId);
-        console.log('Client ID recuperado:', clientId);
 
-        // Load ticket data
         const storedTicketData = await AsyncStorage.getItem('apiData2');
         if (storedTicketData) {
           setTickets(JSON.parse(storedTicketData));
@@ -181,7 +168,7 @@ export default function Home() {
   const registerBackgroundFetch = async () => {
     try {
       await BackgroundFetch.registerTaskAsync(LOCATION_TASK_NAME, {
-        minimumInterval: 3600, // 1 hour in seconds
+        minimumInterval: LOCATION_INTERVAL,
         stopOnTerminate: false,
         startOnBoot: true,
       });
@@ -205,7 +192,10 @@ export default function Home() {
         distanceInterval: 10,
       },
       (location) => {
-        setUserLocation(location.coords);
+        setUserLocation({
+          ...location.coords,
+          clientId: selectedNodo ? selectedNodo.id : null
+        });
         if (mapRef.current) {
           mapRef.current.animateToRegion({
             latitude: location.coords.latitude,
@@ -271,6 +261,12 @@ export default function Home() {
                   await saveCheckInData();
                   setComments('');
                   Alert.alert('Check-in exitoso', `Has ingresado a la ubicacion ${selectedNodo.nombre}`);
+                  
+                  // Send location immediately after check-in
+                  await sendLocationToAPI(userLocation);
+                  
+                  // Start sending location every hour
+                  startLocationInterval();
                 } else {
                   Alert.alert('Error', 'No se pudo realizar el check-in. Por favor, intenta de nuevo.');
                 }
@@ -307,7 +303,10 @@ export default function Home() {
                   await AsyncStorage.removeItem('checkedInTicket');
                   Alert.alert('Check-out exitoso', `Has salido de la ubicacion ${selectedNodo.nombre}`);
                   
-                  // Reset LocationSelector and TicketSelector
+                  await sendLocationToAPI(userLocation);
+                  
+                  stopLocationInterval();
+                  
                   if (locationSelectorRef.current) {
                     locationSelectorRef.current.resetSelection();
                   }
@@ -327,9 +326,22 @@ export default function Home() {
     }
   };
 
+  const startLocationInterval = () => {
+    locationIntervalRef.current = setInterval(() => {
+      if (userLocation) {
+        sendLocationToAPI(userLocation);
+      }
+    }, LOCATION_INTERVAL);
+  };
+
+  const stopLocationInterval = () => {
+    if (locationIntervalRef.current) {
+      clearInterval(locationIntervalRef.current);
+    }
+  };
+
   const handleApiCall = async (tipo) => {
     const userId = await AsyncStorage.getItem('userId');
-    const clientId = await AsyncStorage.getItem('clientId');
     const data = {
       tipo,
       nombre: selectedNodo.nombre,
@@ -338,7 +350,7 @@ export default function Home() {
       lat: userLocation.latitude.toString(),
       log: userLocation.longitude.toString(),
       fecha_registro: new Date().toISOString(),
-      id_clientes: clientId,
+      id_clientes: selectedNodo.id.toString(),
       id_usuario: userId
     };
 
@@ -369,9 +381,6 @@ export default function Home() {
         if (!response.ok) {
           throw new Error('Network response was not ok');
         }
-
-        console.log('Calling sendLocationToAPI after successful check-in/out');
-        await sendLocationToAPI(userLocation);
 
         return true;
       } catch (error) {
@@ -499,6 +508,7 @@ export default function Home() {
               await AsyncStorage.removeItem('checkedInNodo');
               await AsyncStorage.removeItem('checkedInTicket');
               await AsyncStorage.setItem('wasLoggedOut', 'true');
+              stopLocationInterval();
               router.replace('/');
             } catch (error) {
               console.error('Error during logout:', error);
@@ -530,7 +540,13 @@ export default function Home() {
       <ScrollView style={styles.contentContainer} contentContainerStyle={styles.scrollViewContent}>
         <LocationSelector 
           ref={locationSelectorRef}
-          onSelectLocation={setSelectedNodo} 
+          onSelectLocation={(nodo) => {
+            setSelectedNodo(nodo);
+            setUserLocation(prevLocation => ({
+              ...prevLocation,
+              clientId: nodo ? nodo.id : null
+            }));
+          }} 
           isCheckedIn={isCheckedIn} 
           initialLocation={selectedNodo} 
         />
@@ -811,4 +827,3 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 });
-
