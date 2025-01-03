@@ -12,7 +12,6 @@ export default function Layout() {
         if (authToken) {
           router.replace("/loading");
         }
-        // Si no hay token, se queda en la pantalla de login (index.js)
       } catch (error) {
         console.error("Error checking auth status:", error);
       }
