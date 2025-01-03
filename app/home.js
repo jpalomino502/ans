@@ -264,7 +264,6 @@ export default function Home() {
                   
                   await sendLocationToAPI(userLocation);
                   
-                  // Start sending location every hour
                   startLocationInterval();
                 } else {
                   Alert.alert('Error', 'No se pudo realizar el check-in. Por favor, intenta de nuevo.');
