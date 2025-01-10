@@ -1,18 +1,14 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 
-interface SyncStatusBarProps {
-  syncedCount: number;
-  unsyncedCount: number;
-}
-
-const SyncStatusBar: React.FC<SyncStatusBarProps> = ({ syncedCount, unsyncedCount }) => {
+const SyncStatusBar = ({ syncedCount, unsyncedCount, isSyncing }) => {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Envíos:</Text>
       <View style={styles.statusContainer}>
         <Text style={[styles.status, styles.synced]}>{syncedCount} enviados</Text>
         <Text style={[styles.status, styles.unsynced]}>{unsyncedCount} pendientes</Text>
+        {isSyncing && <Text style={[styles.status, styles.syncing]}>Sincronizando...</Text>}
       </View>
     </View>
   );
@@ -45,12 +41,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#4CAF50',
     color: 'white',
   },
-  
   unsynced: {
     backgroundColor: '#F44336',
+    color: 'white',
+  },
+  syncing: {
+    backgroundColor: '#FFA500',
     color: 'white',
   },
 });
 
 export default SyncStatusBar;
-
