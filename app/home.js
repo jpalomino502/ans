@@ -30,7 +30,7 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
   }
 });
 
-async function sendLocationToAPI(coords) {
+async function sendLocationToAPI(coords, checkInOutData = null) {
   const userId = await AsyncStorage.getItem('userId');
   const clientId = coords.clientId;
   if (!userId || !clientId) {
@@ -43,9 +43,10 @@ async function sendLocationToAPI(coords) {
     id_clientes: clientId.toString(),
     lat: coords.latitude.toString(),
     log: coords.longitude.toString(),
+    ...checkInOutData
   };
 
-  console.log('Sending location to API:', JSON.stringify(locationData, null, 2));
+  console.log('Sending data to API:', JSON.stringify(locationData, null, 2));
 
   const isOnline = await NetInfo.fetch().then(state => state.isConnected && state.isInternetReachable);
 
@@ -69,9 +70,9 @@ async function sendLocationToAPI(coords) {
 
     const responseText = await response.text();
     console.log('Location API Response:', responseText);
-    console.log('Location sent successfully');
+    console.log('Location and check-in/out data sent successfully');
   } catch (error) {
-    console.error('Error sending location:', error);
+    console.error('Error sending location and check-in/out data:', error);
     await storePendingLocation(locationData);
   }
 }
@@ -169,13 +170,13 @@ export default function Home() {
       const newIsOnline = state.isConnected && state.isInternetReachable;
       setIsOnline(newIsOnline);
       setConnectionStatus(newIsOnline ? 'Online' : 'Offline');
-      if (newIsOnline && !isSyncing) { // Update: Check isSyncing state
+      if (newIsOnline && !isSyncing) { 
         syncPendingData();
       }
     });
 
     return () => unsubscribe();
-  }, [isSyncing]); // Update: Add isSyncing to dependency array
+  }, [isSyncing]);
 
   const registerBackgroundFetch = async () => {
     try {
