@@ -11,6 +11,7 @@ import * as BackgroundFetch from 'expo-background-fetch';
 import * as TaskManager from 'expo-task-manager';
 import LocationSelector from './components/LocationSelector';
 import TicketSelector from './components/TicketSelector';
+import SyncStatusBar from './components/SyncStatusBar';
 
 const LOCATION_TASK_NAME = 'background-location-task';
 const LOCATION_INTERVAL = 3600000;
@@ -22,10 +23,10 @@ TaskManager.defineTask(LOCATION_TASK_NAME, async () => {
       const location = await Location.getCurrentPositionAsync({});
       await sendLocationToAPI(location.coords);
     }
-    return BackgroundFetch.Result.NewData;
+    return BackgroundFetch.BackgroundFetchResult.NewData;
   } catch (error) {
     console.error('Error in background task:', error);
-    return BackgroundFetch.Result.Failed;
+    return BackgroundFetch.BackgroundFetchResult.Failed;
   }
 });
 
@@ -98,6 +99,8 @@ export default function Home() {
   const [tickets, setTickets] = useState([]);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [comments, setComments] = useState('');
+  const [syncedCount, setSyncedCount] = useState(0);
+  const [unsyncedCount, setUnsyncedCount] = useState(0);
   const mapRef = useRef(null);
   const locationSelectorRef = useRef(null);
   const ticketSelectorRef = useRef(null);
@@ -132,7 +135,9 @@ export default function Home() {
         }
         const storedOfflineData = await AsyncStorage.getItem('offlineData');
         if (storedOfflineData) {
-          setOfflineData(JSON.parse(storedOfflineData));
+          const parsedOfflineData = JSON.parse(storedOfflineData);
+          setOfflineData(parsedOfflineData);
+          setUnsyncedCount(parsedOfflineData.length);
         }
         const storedIsCheckedIn = await AsyncStorage.getItem('isCheckedIn');
         if (storedIsCheckedIn) {
@@ -164,7 +169,7 @@ export default function Home() {
       setIsOnline(newIsOnline);
       setConnectionStatus(newIsOnline ? 'Online' : 'Offline');
       if (newIsOnline) {
-        syncOfflineData();
+        syncPendingData();
       }
     });
 
@@ -386,6 +391,7 @@ export default function Home() {
           throw new Error('Network response was not ok');
         }
 
+        setSyncedCount(prevCount => prevCount + 1);
         return true;
       } catch (error) {
         console.error('Error:', error);
@@ -405,6 +411,7 @@ export default function Home() {
       const updatedOfflineData = [...offlineData, data];
       await AsyncStorage.setItem('offlineData', JSON.stringify(updatedOfflineData));
       setOfflineData(updatedOfflineData);
+      setUnsyncedCount(prevCount => prevCount + 1);
     } catch (error) {
       console.error('Error storing offline data:', error);
     }
@@ -415,6 +422,9 @@ export default function Home() {
 
     console.log('Starting offline data sync');
     const updatedOfflineData = [...offlineData];
+    let newSyncedCount = syncedCount;
+    let newUnsyncedCount = unsyncedCount;
+
     for (let i = 0; i < updatedOfflineData.length; i++) {
       try {
         console.log('Syncing item:', JSON.stringify(updatedOfflineData[i], null, 2));
@@ -442,6 +452,8 @@ export default function Home() {
           console.log('Successfully synced item');
           updatedOfflineData.splice(i, 1);
           i--;
+          newSyncedCount++;
+          newUnsyncedCount--;
         } else {
           console.error('Failed to sync item:', updatedOfflineData[i]);
         }
@@ -452,15 +464,24 @@ export default function Home() {
 
     console.log('Offline sync complete. Remaining items:', updatedOfflineData.length);
     setOfflineData(updatedOfflineData);
+    setSyncedCount(newSyncedCount);
+    setUnsyncedCount(newUnsyncedCount);
     await AsyncStorage.setItem('offlineData', JSON.stringify(updatedOfflineData));
+  };
 
-    const pendingLocations = await AsyncStorage.getItem('pendingLocations');
-    if (pendingLocations) {
-      const locations = JSON.parse(pendingLocations);
-      for (const location of locations) {
-        await sendLocationToAPI(location);
+  const syncPendingData = async () => {
+    try {
+      await syncOfflineData();
+      const pendingLocations = await AsyncStorage.getItem('pendingLocations');
+      if (pendingLocations) {
+        const locations = JSON.parse(pendingLocations);
+        for (const location of locations) {
+          await sendLocationToAPI(location);
+        }
+        await AsyncStorage.removeItem('pendingLocations');
       }
-      await AsyncStorage.removeItem('pendingLocations');
+    } catch (error) {
+      console.error('Error syncing pending data:', error);
     }
   };
 
@@ -540,6 +561,8 @@ export default function Home() {
           <Ionicons name="log-out-outline" size={24} color={isCheckedIn ? "gray" : "black"} />
         </TouchableOpacity>
       </View>
+
+      <SyncStatusBar syncedCount={syncedCount} unsyncedCount={unsyncedCount} />
 
       <ScrollView style={styles.contentContainer} contentContainerStyle={styles.scrollViewContent}>
         <LocationSelector 
