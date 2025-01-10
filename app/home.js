@@ -101,6 +101,7 @@ export default function Home() {
   const [comments, setComments] = useState('');
   const [syncedCount, setSyncedCount] = useState(0);
   const [unsyncedCount, setUnsyncedCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false); // Added state for syncing
   const mapRef = useRef(null);
   const locationSelectorRef = useRef(null);
   const ticketSelectorRef = useRef(null);
@@ -168,13 +169,13 @@ export default function Home() {
       const newIsOnline = state.isConnected && state.isInternetReachable;
       setIsOnline(newIsOnline);
       setConnectionStatus(newIsOnline ? 'Online' : 'Offline');
-      if (newIsOnline) {
+      if (newIsOnline && !isSyncing) { // Update: Check isSyncing state
         syncPendingData();
       }
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [isSyncing]); // Update: Add isSyncing to dependency array
 
   const registerBackgroundFetch = async () => {
     try {
@@ -436,18 +437,6 @@ export default function Home() {
           body: JSON.stringify(updatedOfflineData[i]),
         });
 
-        const responseText = await response.text();
-        console.log('API Response for sync (raw):', responseText);
-
-        let responseData;
-        try {
-          responseData = JSON.parse(responseText);
-          console.log('API Response for sync (parsed):', JSON.stringify(responseData, null, 2));
-        } catch (parseError) {
-          console.error('Error parsing JSON during sync:', parseError);
-          continue;
-        }
-
         if (response.ok) {
           console.log('Successfully synced item');
           updatedOfflineData.splice(i, 1);
@@ -470,18 +459,34 @@ export default function Home() {
   };
 
   const syncPendingData = async () => {
+    if (isSyncing) return;
+
     try {
-      await syncOfflineData();
+      setIsSyncing(true);
+      console.log('Starting sync of pending data...');
+
+      // Sync offline data
+      if (offlineData.length > 0) {
+        console.log(`Syncing ${offlineData.length} offline items...`);
+        await syncOfflineData();
+      }
+
+      // Sync pending locations
       const pendingLocations = await AsyncStorage.getItem('pendingLocations');
       if (pendingLocations) {
         const locations = JSON.parse(pendingLocations);
+        console.log(`Syncing ${locations.length} pending locations...`);
         for (const location of locations) {
           await sendLocationToAPI(location);
         }
         await AsyncStorage.removeItem('pendingLocations');
       }
+
+      console.log('Sync completed successfully');
     } catch (error) {
       console.error('Error syncing pending data:', error);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -562,7 +567,7 @@ export default function Home() {
         </TouchableOpacity>
       </View>
 
-      <SyncStatusBar syncedCount={syncedCount} unsyncedCount={unsyncedCount} />
+      <SyncStatusBar syncedCount={syncedCount} unsyncedCount={unsyncedCount} isSyncing={isSyncing} /> {/* Update: Pass isSyncing prop */}
 
       <ScrollView style={styles.contentContainer} contentContainerStyle={styles.scrollViewContent}>
         <LocationSelector 
@@ -854,3 +859,4 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
 });
+
