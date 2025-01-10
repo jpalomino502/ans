@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, Alert, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Constants from 'expo-constants';
@@ -46,6 +46,13 @@ async function sendLocationToAPI(coords) {
 
   console.log('Sending location to API:', JSON.stringify(locationData, null, 2));
 
+  const isOnline = await NetInfo.fetch().then(state => state.isConnected && state.isInternetReachable);
+
+  if (!isOnline) {
+    await storePendingLocation(locationData);
+    return;
+  }
+
   try {
     const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ubicacion-usuario', {
       method: 'POST',
@@ -61,7 +68,6 @@ async function sendLocationToAPI(coords) {
 
     const responseText = await response.text();
     console.log('Location API Response:', responseText);
-
     console.log('Location sent successfully');
   } catch (error) {
     console.error('Error sending location:', error);
@@ -88,12 +94,11 @@ export default function Home() {
   const [distance, setDistance] = useState(null);
   const [offlineData, setOfflineData] = useState([]);
   const [isOnline, setIsOnline] = useState(true);
-  const [entryId, setEntryId] = useState('');
-  const mapRef = useRef(null);
   const [connectionStatus, setConnectionStatus] = useState('Checking...');
   const [tickets, setTickets] = useState([]);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [comments, setComments] = useState('');
+  const mapRef = useRef(null);
   const locationSelectorRef = useRef(null);
   const ticketSelectorRef = useRef(null);
   const locationIntervalRef = useRef(null);
@@ -155,9 +160,10 @@ export default function Home() {
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
-      setIsOnline(state.isConnected);
-      setConnectionStatus(state.isConnected ? 'Online' : 'Offline');
-      if (state.isConnected) {
+      const newIsOnline = state.isConnected && state.isInternetReachable;
+      setIsOnline(newIsOnline);
+      setConnectionStatus(newIsOnline ? 'Online' : 'Offline');
+      if (newIsOnline) {
         syncOfflineData();
       }
     });
