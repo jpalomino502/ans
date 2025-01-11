@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, Circle } from 'react-native-maps';
+import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
@@ -170,13 +171,10 @@ export default function Home() {
       const newIsOnline = state.isConnected && state.isInternetReachable;
       setIsOnline(newIsOnline);
       setConnectionStatus(newIsOnline ? 'Online' : 'Offline');
-      if (newIsOnline && !isSyncing) {
-        syncPendingData();
-      }
     });
 
     return () => unsubscribe();
-  }, []); // Remove isSyncing from the dependency array
+  }, []);
 
   const registerBackgroundFetch = async () => {
     try {
@@ -495,6 +493,27 @@ export default function Home() {
   };
 
   useEffect(() => {
+    let syncInterval = null;
+
+    if (isOnline) {
+      syncPendingData(); // Intenta sincronizar inmediatamente al conectarse
+      syncInterval = setInterval(() => {
+        syncPendingData();
+      }, 60000); // Intenta sincronizar cada minuto mientras esté en línea
+    } else {
+      if (syncInterval) {
+        clearInterval(syncInterval);
+      }
+    }
+
+    return () => {
+      if (syncInterval) {
+        clearInterval(syncInterval);
+      }
+    };
+  }, [isOnline]);
+
+  useEffect(() => {
     if (selectedNodo && userLocation) {
       const calculatedDistance = calculateDistance(
         userLocation.latitude,
@@ -513,12 +532,6 @@ export default function Home() {
   useEffect(() => {
     console.log('Selected nodo updated:', selectedNodo);
   }, [selectedNodo]);
-
-  useEffect(() => {
-    if (isOnline && !isSyncing) {
-      syncPendingData();
-    }
-  }, [isOnline]); // Only depend on isOnline
 
   const handleLogout = async () => {
     if (isCheckedIn) {
@@ -679,4 +692,3 @@ export default function Home() {
     </View>
   );
 }
-
