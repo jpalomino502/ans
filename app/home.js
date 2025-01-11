@@ -47,12 +47,12 @@ async function sendLocationToAPI(coords, checkInOutData = null) {
     ...checkInOutData
   };
 
-  console.log('Sending data to API:', JSON.stringify(locationData, null, 2));
+  console.log('Sending location data to API:', JSON.stringify(locationData, null, 2));
 
   const isOnline = await NetInfo.fetch().then(state => state.isConnected && state.isInternetReachable);
 
   if (!isOnline) {
-    await storePendingLocation(locationData);
+    await storePendingLocationData(locationData);
     return;
   }
 
@@ -71,20 +71,21 @@ async function sendLocationToAPI(coords, checkInOutData = null) {
 
     const responseText = await response.text();
     console.log('Location API Response:', responseText);
-    console.log('Location and check-in/out data sent successfully');
+    console.log('Location data sent successfully');
   } catch (error) {
-    console.error('Error sending location and check-in/out data:', error);
-    await storePendingLocation(locationData);
+    console.error('Error sending location data:', error);
+    await storePendingLocationData(locationData);
   }
 }
 
-async function storePendingLocation(locationData) {
+async function storePendingLocationData(locationData) {
   try {
-    const pendingLocations = await AsyncStorage.getItem('pendingLocations');
-    const updatedPendingLocations = pendingLocations ? [...JSON.parse(pendingLocations), locationData] : [locationData];
-    await AsyncStorage.setItem('pendingLocations', JSON.stringify(updatedPendingLocations));
+    const pendingLocationData = await AsyncStorage.getItem('pendingLocationData');
+    const updatedPendingLocationData = pendingLocationData ? [...JSON.parse(pendingLocationData), locationData] : [locationData];
+    await AsyncStorage.setItem('pendingLocationData', JSON.stringify(updatedPendingLocationData));
+    console.log('Location data stored locally');
   } catch (error) {
-    console.error('Error storing pending location:', error);
+    console.error('Error storing pending location data:', error);
   }
 }
 
@@ -172,7 +173,7 @@ export default function Home() {
   const syncPendingData = useCallback(async () => {
     if (isSyncing || !isOnline) return;
 
-    const pendingLocations = await AsyncStorage.getItem('pendingLocations');
+    const pendingLocations = await AsyncStorage.getItem('pendingLocationData');
     const hasPendingLocations = pendingLocations && JSON.parse(pendingLocations).length > 0;
 
     if (offlineData.length === 0 && !hasPendingLocations) {
@@ -184,21 +185,40 @@ export default function Home() {
     try {
       console.log('Starting sync of pending data...');
 
-      // Sync offline data
-      if (offlineData.length > 0) {
-        console.log(`Syncing ${offlineData.length} offline items...`);
-        await syncOfflineData();
-      }
+    // Sync offline data (ingreso-salidas)
+    if (offlineData.length > 0) {
+      console.log(`Syncing ${offlineData.length} offline items...`);
+      await syncOfflineData();
+    }
 
-      // Sync pending locations
-      if (hasPendingLocations) {
-        const locations = JSON.parse(pendingLocations);
-        console.log(`Syncing ${locations.length} pending locations...`);
-        for (const location of locations) {
-          await sendLocationToAPI(location);
+    // Sync pending location data
+    if (hasPendingLocations) {
+      const locations = JSON.parse(pendingLocations);
+      console.log(`Syncing ${locations.length} pending location data...`);
+      for (const location of locations) {
+        try {
+          const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ubicacion-usuario', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(location),
+          });
+
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+
+          console.log('Location data synced successfully');
+        } catch (error) {
+          console.error('Error syncing location data:', error);
+          // Si falla, dejamos el dato en el almacenamiento local para intentar de nuevo más tarde
+          continue;
         }
-        await AsyncStorage.removeItem('pendingLocations');
       }
+      // Eliminar los datos sincronizados exitosamente
+      await AsyncStorage.removeItem('pendingLocationData');
+    }
 
       console.log('Sync completed successfully');
     } catch (error) {
@@ -206,7 +226,7 @@ export default function Home() {
     } finally {
       setIsSyncing(false);
     }
-  }, [offlineData, isSyncing, isOnline]);
+  }, [offlineData, isSyncing, isOnline, syncOfflineData]);
 
   const checkAndSyncPendingData = useCallback(() => {
     if (isOnline && !isSyncing) {
@@ -249,8 +269,7 @@ export default function Home() {
     getSavedData();
     setupLocationTracking();
     registerBackgroundFetch();
-    // Remover la llamada a syncPendingData() de aquí
-  }, []);  // Remover syncPendingData de las dependencias
+  }, []);
 
   useEffect(() => {
     let locationSubscription;
@@ -551,6 +570,7 @@ export default function Home() {
     } else {
       console.log('Offline: Storing data locally');
       await storeOfflineData(data);
+      checkAndSyncPendingData(); 
       return true;
     }
   };
