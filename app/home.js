@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, Alert, ScrollView } from 'react-native';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { View, Text, TextInput, TouchableOpacity, Alert, ScrollView, AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import Constants from 'expo-constants';
@@ -129,6 +129,91 @@ export default function Home() {
     }
   };
 
+  const syncOfflineData = async () => {
+    if (offlineData.length === 0) return;
+
+    console.log('Starting offline data sync');
+    const updatedOfflineData = [...offlineData];
+    let newSyncedCount = syncedCount;
+    let newUnsyncedCount = unsyncedCount;
+
+    for (let i = 0; i < updatedOfflineData.length; i++) {
+      try {
+        console.log('Syncing item:', JSON.stringify(updatedOfflineData[i], null, 2));
+        const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ingreso-salidas', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(updatedOfflineData[i]),
+        });
+
+        if (response.ok) {
+          console.log('Successfully synced item');
+          updatedOfflineData.splice(i, 1);
+          i--;
+          newSyncedCount++;
+          newUnsyncedCount--;
+        } else {
+          console.error('Failed to sync item:', updatedOfflineData[i]);
+        }
+      } catch (error) {
+        console.error('Error syncing offline data:', error);
+      }
+    }
+
+    console.log('Offline sync complete. Remaining items:', updatedOfflineData.length);
+    setOfflineData(updatedOfflineData);
+    setSyncedCount(newSyncedCount);
+    setUnsyncedCount(newUnsyncedCount);
+    await AsyncStorage.setItem('offlineData', JSON.stringify(updatedOfflineData));
+  };
+
+  const syncPendingData = useCallback(async () => {
+    if (isSyncing || !isOnline) return;
+
+    const pendingLocations = await AsyncStorage.getItem('pendingLocations');
+    const hasPendingLocations = pendingLocations && JSON.parse(pendingLocations).length > 0;
+
+    if (offlineData.length === 0 && !hasPendingLocations) {
+      return; // No hay datos para sincronizar, salir silenciosamente
+    }
+
+    setIsSyncing(true);
+
+    try {
+      console.log('Starting sync of pending data...');
+
+      // Sync offline data
+      if (offlineData.length > 0) {
+        console.log(`Syncing ${offlineData.length} offline items...`);
+        await syncOfflineData();
+      }
+
+      // Sync pending locations
+      if (hasPendingLocations) {
+        const locations = JSON.parse(pendingLocations);
+        console.log(`Syncing ${locations.length} pending locations...`);
+        for (const location of locations) {
+          await sendLocationToAPI(location);
+        }
+        await AsyncStorage.removeItem('pendingLocations');
+      }
+
+      console.log('Sync completed successfully');
+    } catch (error) {
+      console.error('Error syncing pending data:', error);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [offlineData, isSyncing, isOnline]);
+
+  const checkAndSyncPendingData = useCallback(() => {
+    if (isOnline && !isSyncing) {
+      syncPendingData();
+    }
+  }, [isOnline, isSyncing, syncPendingData]);
+
   useEffect(() => {
     const getSavedData = async () => {
       try {
@@ -164,17 +249,79 @@ export default function Home() {
     getSavedData();
     setupLocationTracking();
     registerBackgroundFetch();
-  }, []);
+    // Remover la llamada a syncPendingData() de aquí
+  }, []);  // Remover syncPendingData de las dependencias
+
+  useEffect(() => {
+    let locationSubscription;
+
+    const setupLocationTracking = async () => {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permiso denegado', 'Se necesita acceso a la ubicación para usar esta aplicación.');
+        return;
+      }
+
+      locationSubscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 10000,
+          distanceInterval: 10,
+        },
+        (location) => {
+          setUserLocation(prevLocation => {
+            if (
+              prevLocation &&
+              prevLocation.latitude === location.coords.latitude &&
+              prevLocation.longitude === location.coords.longitude
+            ) {
+              return prevLocation; // No actualizar si la ubicación no ha cambiado
+            }
+            return {
+              ...location.coords,
+              clientId: selectedNodo ? selectedNodo.id : null
+            };
+          });
+        }
+      );
+    };
+
+    setupLocationTracking();
+
+    return () => {
+      if (locationSubscription) {
+        locationSubscription.remove();
+      }
+    };
+  }, [selectedNodo]);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
       const newIsOnline = state.isConnected && state.isInternetReachable;
       setIsOnline(newIsOnline);
       setConnectionStatus(newIsOnline ? 'Online' : 'Offline');
+
+      if (newIsOnline) {
+        syncPendingData();
+      }
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => {
+      unsubscribe();
+    };
+  }, [syncPendingData]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', nextAppState => {
+      if (nextAppState === 'active') {
+        syncPendingData();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [syncPendingData]);
 
   const registerBackgroundFetch = async () => {
     try {
@@ -398,6 +545,8 @@ export default function Home() {
         console.log('Storing data offline due to error');
         await storeOfflineData(data);
         return false;
+      } finally {
+        checkAndSyncPendingData();
       }
     } else {
       console.log('Offline: Storing data locally');
@@ -412,106 +561,11 @@ export default function Home() {
       await AsyncStorage.setItem('offlineData', JSON.stringify(updatedOfflineData));
       setOfflineData(updatedOfflineData);
       setUnsyncedCount(prevCount => prevCount + 1);
+      checkAndSyncPendingData();
     } catch (error) {
       console.error('Error storing offline data:', error);
     }
   };
-
-  const syncOfflineData = async () => {
-    if (offlineData.length === 0) return;
-
-    console.log('Starting offline data sync');
-    const updatedOfflineData = [...offlineData];
-    let newSyncedCount = syncedCount;
-    let newUnsyncedCount = unsyncedCount;
-
-    for (let i = 0; i < updatedOfflineData.length; i++) {
-      try {
-        console.log('Syncing item:', JSON.stringify(updatedOfflineData[i], null, 2));
-        const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ingreso-salidas', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(updatedOfflineData[i]),
-        });
-
-        if (response.ok) {
-          console.log('Successfully synced item');
-          updatedOfflineData.splice(i, 1);
-          i--;
-          newSyncedCount++;
-          newUnsyncedCount--;
-        } else {
-          console.error('Failed to sync item:', updatedOfflineData[i]);
-        }
-      } catch (error) {
-        console.error('Error syncing offline data:', error);
-      }
-    }
-
-    console.log('Offline sync complete. Remaining items:', updatedOfflineData.length);
-    setOfflineData(updatedOfflineData);
-    setSyncedCount(newSyncedCount);
-    setUnsyncedCount(newUnsyncedCount);
-    await AsyncStorage.setItem('offlineData', JSON.stringify(updatedOfflineData));
-  };
-
-  const syncPendingData = async () => {
-    if (isSyncing) return;
-
-    let localIsSyncing = true;
-    setIsSyncing(true);
-
-    try {
-      console.log('Starting sync of pending data...');
-
-      // Sync offline data
-      if (offlineData.length > 0) {
-        console.log(`Syncing ${offlineData.length} offline items...`);
-        await syncOfflineData();
-      }
-
-      // Sync pending locations
-      const pendingLocations = await AsyncStorage.getItem('pendingLocations');
-      if (pendingLocations) {
-        const locations = JSON.parse(pendingLocations);
-        console.log(`Syncing ${locations.length} pending locations...`);
-        for (const location of locations) {
-          await sendLocationToAPI(location);
-        }
-        await AsyncStorage.removeItem('pendingLocations');
-      }
-
-      console.log('Sync completed successfully');
-    } catch (error) {
-      console.error('Error syncing pending data:', error);
-    } finally {
-      localIsSyncing = false;
-      setIsSyncing(false);
-    }
-  };
-
-  useEffect(() => {
-    let syncInterval = null;
-
-    if (isOnline) {
-      syncPendingData(); // Intenta sincronizar inmediatamente al conectarse
-      syncInterval = setInterval(() => {
-        syncPendingData();
-      }, 60000); // Intenta sincronizar cada minuto mientras esté en línea
-    } else {
-      if (syncInterval) {
-        clearInterval(syncInterval);
-      }
-    }
-
-    return () => {
-      if (syncInterval) {
-        clearInterval(syncInterval);
-      }
-    };
-  }, [isOnline]);
 
   useEffect(() => {
     if (selectedNodo && userLocation) {
