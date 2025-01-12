@@ -177,7 +177,7 @@ export default function Home() {
     const hasPendingLocations = pendingLocations && JSON.parse(pendingLocations).length > 0;
 
     if (offlineData.length === 0 && !hasPendingLocations) {
-      return; // No hay datos para sincronizar, salir silenciosamente
+      return;
     }
 
     setIsSyncing(true);
@@ -185,13 +185,11 @@ export default function Home() {
     try {
       console.log('Starting sync of pending data...');
 
-    // Sync offline data (ingreso-salidas)
     if (offlineData.length > 0) {
       console.log(`Syncing ${offlineData.length} offline items...`);
       await syncOfflineData();
     }
 
-    // Sync pending location data
     if (hasPendingLocations) {
       const locations = JSON.parse(pendingLocations);
       console.log(`Syncing ${locations.length} pending location data...`);
@@ -212,11 +210,9 @@ export default function Home() {
           console.log('Location data synced successfully');
         } catch (error) {
           console.error('Error syncing location data:', error);
-          // Si falla, dejamos el dato en el almacenamiento local para intentar de nuevo más tarde
           continue;
         }
       }
-      // Eliminar los datos sincronizados exitosamente
       await AsyncStorage.removeItem('pendingLocationData');
     }
 
@@ -294,7 +290,7 @@ export default function Home() {
               prevLocation.latitude === location.coords.latitude &&
               prevLocation.longitude === location.coords.longitude
             ) {
-              return prevLocation; // No actualizar si la ubicación no ha cambiado
+              return prevLocation;
             }
             return {
               ...location.coords,
