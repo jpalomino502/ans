@@ -95,6 +95,7 @@ export default function Home() {
   const [selectedNodo, setSelectedNodo] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [isCheckedIn, setIsCheckedIn] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [distance, setDistance] = useState(null);
   const [offlineData, setOfflineData] = useState([]);
   const [isOnline, setIsOnline] = useState(true);
@@ -114,6 +115,7 @@ export default function Home() {
     try {
       await AsyncStorage.setItem('checkedInNodo', JSON.stringify(selectedNodo));
       await AsyncStorage.setItem('checkedInTicket', JSON.stringify(selectedTicket));
+      await AsyncStorage.setItem('isPaused', JSON.stringify(isPaused));
     } catch (error) {
       console.error('Error saving check-in data:', error);
     }
@@ -123,11 +125,158 @@ export default function Home() {
     try {
       const savedNodo = await AsyncStorage.getItem('checkedInNodo');
       const savedTicket = await AsyncStorage.getItem('checkedInTicket');
+      const savedIsPaused = await AsyncStorage.getItem('isPaused');
       if (savedNodo) setSelectedNodo(JSON.parse(savedNodo));
       if (savedTicket) setSelectedTicket(JSON.parse(savedTicket));
+      if (savedIsPaused) setIsPaused(JSON.parse(savedIsPaused));
     } catch (error) {
       console.error('Error loading check-in data:', error);
     }
+  };
+
+  const handleCheckIn = () => {
+    if (!userLocation || !comments.trim()) {
+      Alert.alert('Error', 'Debes ingresar un comentario para el ingreso.');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar ingreso',
+      `¿Estás seguro de que quieres ingresar a la ubicacion ${selectedNodo.nombre}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sí, ingresar',
+          onPress: async () => {
+            console.log('Initiating check-in');
+            const success = await handleApiCall('entrada');
+            if (success) {
+              setIsCheckedIn(true);
+              setIsPaused(false);
+              await AsyncStorage.setItem('isCheckedIn', 'true');
+              await AsyncStorage.setItem('isPaused', 'false');
+              await saveCheckInData();
+              setComments('');
+              Alert.alert('Check-in exitoso', `Has ingresado a la ubicacion ${selectedNodo.nombre}`);
+              await sendLocationToAPI(userLocation);
+              startLocationInterval();
+            } else {
+              Alert.alert('Error', 'No se pudo realizar el check-in. Por favor, intenta de nuevo.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleCheckOut = () => {
+    if (!comments.trim()) {
+      Alert.alert('Error', 'Debes ingresar un comentario para la salida.');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar salida',
+      '¿Estás seguro de que quieres salir?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sí, salir',
+          onPress: async () => {
+            console.log('Initiating check-out');
+            const success = await handleApiCall('salida');
+            if (success) {
+              setIsCheckedIn(false);
+              setIsPaused(false);
+              await AsyncStorage.setItem('isCheckedIn', 'false');
+              await AsyncStorage.setItem('isPaused', 'false');
+              setSelectedNodo(null);
+              setSelectedTicket(null);
+              setComments('');
+              await AsyncStorage.removeItem('checkedInNodo');
+              await AsyncStorage.removeItem('checkedInTicket');
+              Alert.alert('Check-out exitoso', `Has salido de la ubicacion ${selectedNodo.nombre}`);
+              await sendLocationToAPI(userLocation);
+              stopLocationInterval();
+              if (locationSelectorRef.current) {
+                locationSelectorRef.current.resetSelection();
+              }
+              if (ticketSelectorRef.current) {
+                ticketSelectorRef.current.resetSelection();
+              }
+            } else {
+              Alert.alert('Error', 'No se pudo realizar el check-out. Por favor, intenta de nuevo.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handlePause = () => {
+    if (!comments.trim()) {
+      Alert.alert('Error', 'Debes ingresar un comentario para la pausa.');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar pausa',
+      '¿Estás seguro de que quieres pausar tu actividad?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sí, pausar',
+          onPress: async () => {
+            console.log('Initiating pause');
+            const success = await handleApiCall('pausa');
+            if (success) {
+              setIsPaused(true);
+              await AsyncStorage.setItem('isPaused', 'true');
+              await saveCheckInData();
+              setComments('');
+              Alert.alert('Pausa exitosa', 'Has pausado tu actividad');
+              await sendLocationToAPI(userLocation);
+              stopLocationInterval();
+            } else {
+              Alert.alert('Error', 'No se pudo realizar la pausa. Por favor, intenta de nuevo.');
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleResume = () => {
+    if (!comments.trim()) {
+      Alert.alert('Error', 'Debes ingresar un comentario para reanudar.');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmar reanudar',
+      '¿Estás seguro de que quieres reanudar tu actividad?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sí, reanudar',
+          onPress: async () => {
+            console.log('Initiating resume');
+            const success = await handleApiCall('reanudar');
+            if (success) {
+              setIsPaused(false);
+              await AsyncStorage.setItem('isPaused', 'false');
+              await saveCheckInData();
+              setComments('');
+              Alert.alert('Reanudación exitosa', 'Has reanudado tu actividad');
+              await sendLocationToAPI(userLocation);
+              startLocationInterval();
+            } else {
+              Alert.alert('Error', 'No se pudo reanudar la actividad. Por favor, intenta de nuevo.');
+            }
+          }
+        }
+      ]
+    );
   };
 
   const syncOfflineData = async () => {
@@ -185,36 +334,36 @@ export default function Home() {
     try {
       console.log('Starting sync of pending data...');
 
-    if (offlineData.length > 0) {
-      console.log(`Syncing ${offlineData.length} offline items...`);
-      await syncOfflineData();
-    }
-
-    if (hasPendingLocations) {
-      const locations = JSON.parse(pendingLocations);
-      console.log(`Syncing ${locations.length} pending location data...`);
-      for (const location of locations) {
-        try {
-          const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ubicacion-usuario', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(location),
-          });
-
-          if (!response.ok) {
-            throw new Error('Network response was not ok');
-          }
-
-          console.log('Location data synced successfully');
-        } catch (error) {
-          console.error('Error syncing location data:', error);
-          continue;
-        }
+      if (offlineData.length > 0) {
+        console.log(`Syncing ${offlineData.length} offline items...`);
+        await syncOfflineData();
       }
-      await AsyncStorage.removeItem('pendingLocationData');
-    }
+
+      if (hasPendingLocations) {
+        const locations = JSON.parse(pendingLocations);
+        console.log(`Syncing ${locations.length} pending location data...`);
+        for (const location of locations) {
+          try {
+            const response = await fetch('https://asistenciaoperacional.grupoans.com.co/api/ubicacion-usuario', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(location),
+            });
+
+            if (!response.ok) {
+              throw new Error('Network response was not ok');
+            }
+
+            console.log('Location data synced successfully');
+          } catch (error) {
+            console.error('Error syncing location data:', error);
+            continue;
+          }
+        }
+        await AsyncStorage.removeItem('pendingLocationData');
+      }
 
       console.log('Sync completed successfully');
     } catch (error) {
@@ -396,107 +545,6 @@ export default function Home() {
     return R * c;
   };
 
-  const handleCheckInOut = async () => {
-    if (!userLocation) return;
-
-    const distance = calculateDistance(
-      userLocation.latitude,
-      userLocation.longitude,
-      parseFloat(selectedNodo.latitud),
-      parseFloat(selectedNodo.longitud)
-    );
-
-    const maxDistance = 20000;
-
-    if (distance <= maxDistance) {
-      if (!isCheckedIn) {
-        if (!comments.trim()) {
-          Alert.alert('Error', 'Debes ingresar un comentario para el ingreso.');
-          return;
-        }
-
-        Alert.alert(
-          'Confirmar ingreso',
-          `¿Estás seguro de que quieres ingresar a la ubicacion ${selectedNodo.nombre}?`,
-          [
-            {
-              text: 'Cancelar',
-              style: 'cancel'
-            },
-            {
-              text: 'Sí, ingresar',
-              onPress: async () => {
-                console.log('Initiating check-in');
-                const success = await handleApiCall('entrada');
-                if (success) {
-                  setIsCheckedIn(true);
-                  await AsyncStorage.setItem('isCheckedIn', 'true');
-                  await saveCheckInData();
-                  setComments('');
-                  Alert.alert('Check-in exitoso', `Has ingresado a la ubicacion ${selectedNodo.nombre}`);
-                  
-                  await sendLocationToAPI(userLocation);
-                  
-                  startLocationInterval();
-                } else {
-                  Alert.alert('Error', 'No se pudo realizar el check-in. Por favor, intenta de nuevo.');
-                }
-              }
-            }
-          ]
-        );
-      } else {
-        if (!comments.trim()) {
-          Alert.alert('Error', 'Debes ingresar un comentario para la salida.');
-          return;
-        }
-
-        Alert.alert(
-          'Confirmar salida',
-          '¿Estás seguro de que quieres salir?',
-          [
-            {
-              text: 'Cancelar',
-              style: 'cancel'
-            },
-            {
-              text: 'Sí, salir',
-              onPress: async () => {
-                console.log('Initiating check-out');
-                const success = await handleApiCall('salida');
-                if (success) {
-                  setIsCheckedIn(false);
-                  await AsyncStorage.setItem('isCheckedIn', 'false');
-                  setSelectedNodo(null);
-                  setSelectedTicket(null);
-                  setComments('');
-                  await AsyncStorage.removeItem('checkedInNodo');
-                  await AsyncStorage.removeItem('checkedInTicket');
-                  Alert.alert('Check-out exitoso', `Has salido de la ubicacion ${selectedNodo.nombre}`);
-                  
-                  await sendLocationToAPI(userLocation);
-                  
-                  stopLocationInterval();
-                  
-                  if (locationSelectorRef.current) {
-                    locationSelectorRef.current.resetSelection();
-                  }
-                  if (ticketSelectorRef.current) {
-                    ticketSelectorRef.current.resetSelection();
-                  }
-                } else {
-                  Alert.alert('Error', 'No se pudo realizar el check-out. Por favor, intenta de nuevo.');
-                }
-              }
-            }
-          ]
-        );
-      }
-    } else {
-      Alert.alert('Fuera de rango', `Debes estar a menos de ${maxDistance}m de la ubicacion para ${isCheckedIn ? 'salir' : 'ingresar'}.`);
-    }
-  };
-
   const startLocationInterval = () => {
     locationIntervalRef.current = setInterval(() => {
       if (userLocation) {
@@ -630,6 +678,7 @@ export default function Home() {
               await AsyncStorage.removeItem('isCheckedIn');
               await AsyncStorage.removeItem('checkedInNodo');
               await AsyncStorage.removeItem('checkedInTicket');
+              await AsyncStorage.removeItem('isPaused');
               await AsyncStorage.setItem('wasLoggedOut', 'true');
               stopLocationInterval();
               router.replace('/');
@@ -685,7 +734,13 @@ export default function Home() {
         <View style={styles.inputContainer}>
           <TextInput
             style={[styles.input, isCheckedIn ? styles.activeInput : styles.inactiveInput]}
-            placeholder={isCheckedIn ? "Comentarios para salida" : "Comentarios para ingreso"}
+            placeholder={
+              isCheckedIn
+                ? isPaused
+                  ? "Comentarios para reanudar"
+                  : "Comentarios para pausar o salir"
+                : "Comentarios para ingreso"
+            }
             value={comments}
             onChangeText={setComments}
             editable={true}
@@ -694,17 +749,51 @@ export default function Home() {
         </View>
 
         {selectedNodo && selectedTicket && (
-          <TouchableOpacity
-            style={[
-              styles.button,
-              isCheckedIn ? styles.buttonCheckedIn : (distance <= 20000 ? styles.buttonNearby : styles.buttonDefault)
-            ]}
-            onPress={handleCheckInOut}
-          >
-            <Text style={styles.buttonText}>
-              {isCheckedIn ? 'Salir' : 'Ingresar'}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.buttonContainer}>
+            {!isCheckedIn && (
+              <TouchableOpacity
+                style={[
+                  styles.button,
+                  distance <= 20000 ? styles.buttonNearby : styles.buttonDefault
+                ]}
+                onPress={handleCheckIn}
+              >
+                <Text style={styles.buttonText}>Ingresar</Text>
+              </TouchableOpacity>
+            )}
+            
+            {isCheckedIn && (
+              <>
+                <TouchableOpacity
+                  style={[
+                    styles.button,
+                    styles.buttonCheckedIn,
+                    isPaused && styles.buttonDisabled
+                  ]}
+                  onPress={handleCheckOut}
+                  disabled={isPaused}
+                >
+                  <Text style={styles.buttonText}>Salir</Text>
+                </TouchableOpacity>
+
+                {!isPaused ? (
+                  <TouchableOpacity
+                    style={[styles.button, styles.buttonPauseNearby]}
+                    onPress={handlePause}
+                  >
+                    <Text style={styles.buttonText}>Pausar</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.button, styles.buttonResumeNearby]}
+                    onPress={handleResume}
+                  >
+                    <Text style={styles.buttonText}>Reanudar</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </View>
         )}
 
         {selectedNodo && distance !== null && (
@@ -762,3 +851,4 @@ export default function Home() {
     </View>
   );
 }
+

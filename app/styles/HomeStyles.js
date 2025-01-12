@@ -187,9 +187,12 @@ export const styles = StyleSheet.create({
     color: '#4CAF50',
   },
   buttonPauseNearby: {
+    marginTop: 10,
     backgroundColor: '#FFA500',
   },
   buttonResumeNearby: {
+    marginTop: 10,
+
     backgroundColor: '#32CD32',
   },
   disabledLogoutButton: {
