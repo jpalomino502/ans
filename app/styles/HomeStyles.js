@@ -186,6 +186,12 @@ export const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#4CAF50',
   },
+  buttonPauseNearby: {
+    backgroundColor: '#FFA500',
+  },
+  buttonResumeNearby: {
+    backgroundColor: '#32CD32',
+  },
   disabledLogoutButton: {
     opacity: 0.5,
   },
